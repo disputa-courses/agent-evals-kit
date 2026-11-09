@@ -4,6 +4,9 @@
     python -m evals.judge calibrate --split dev            TPR и TNR против вашей разметки
     python -m evals.judge estimate runs/new --split test   доля сбоя в прогоне с поправкой на ошибки судьи
 
+    --prompt и --out дают второго судью рядом с основным: например,
+    нарочно плохого, чтобы увидеть, как он хвалит проваленные попытки.
+
 Промпт — evals/judge_prompt.md. Примеры из части train подставляются
 в {examples} сами. Подбирайте промпт на dev; test смотрите один раз,
 в конце: на нём и видно, не подогнали ли судью.
@@ -53,13 +56,21 @@ def records_of(run: str) -> dict[str, dict]:
     return {f"{Path(run).name}/{r['task_id']}:{r['trial']}": r for r in results}
 
 
-def run(run_dir: str, llm=None) -> None:
+def _shown(p: Path) -> str:
+    try:
+        return str(p.relative_to(ROOT))
+    except ValueError:
+        return str(p)
+
+
+def run(run_dir: str, llm=None, *, prompt: Path | None = None, out: Path | None = None) -> None:
     from kladovka import llm as L
 
+    out = out or OUT
     llm = llm or L.from_env("judge")
     recs = records_of(run_dir)
     rows = analysis.read() if analysis.LABELS.exists() else []
-    template = PROMPT.read_text(encoding="utf-8")
+    template = (prompt or PROMPT).read_text(encoding="utf-8")
     ex = examples(rows, recs)
     train_ids = {r["trace"] for r in rows if r.get("split") == "train"}
     todo = [tid for tid in recs if tid not in train_ids]
@@ -71,18 +82,18 @@ def run(run_dir: str, llm=None) -> None:
     with ThreadPoolExecutor(max_workers=4) as pool:
         answers = list(pool.map(one, todo))
     old = {}
-    if OUT.exists():
-        with OUT.open(encoding="utf-8", newline="") as f:
+    if out.exists():
+        with out.open(encoding="utf-8", newline="") as f:
             old = {r["trace"]: r for r in csv.DictReader(f)}
     for tid, a, why in answers:
         old[tid] = {"trace": tid, "answer": a, "reason": why}
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    with OUT.open("w", encoding="utf-8", newline="") as f:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["trace", "answer", "reason"])
         w.writeheader()
         w.writerows(old.values())
     unknown = sum(1 for _, a, _ in answers if a == "unknown")
-    print(f"ответов судьи: {len(answers)}, не разобрать: {unknown} → {OUT.relative_to(ROOT)}")
+    print(f"ответов судьи: {len(answers)}, не разобрать: {unknown} → {_shown(out)}")
 
 
 def rates(pairs: list[tuple[str, str]]) -> dict:
@@ -104,16 +115,17 @@ def corrected(p_obs: float, tpr: float, tnr: float) -> float:
     return min(1.0, max(0.0, (p_obs + tnr - 1) / denom))
 
 
-def judged() -> dict[str, str]:
-    if not OUT.exists():
-        raise SystemExit(f"нет {OUT.relative_to(ROOT)}: сначала python -m evals.judge run <прогон>")
-    with OUT.open(encoding="utf-8", newline="") as f:
+def judged(out: Path | None = None) -> dict[str, str]:
+    out = out or OUT
+    if not out.exists():
+        raise SystemExit(f"нет {_shown(out)}: сначала python -m evals.judge run <прогон>")
+    with out.open(encoding="utf-8", newline="") as f:
         return {r["trace"]: r["answer"] for r in csv.DictReader(f)}
 
 
-def calibrate(split: str) -> dict:
+def calibrate(split: str, out: Path | None = None) -> dict:
     rows = [r for r in analysis.read() if r.get("split") == split and r.get("judge") in ("yes", "no")]
-    j = judged()
+    j = judged(out)
     pairs = [(r["judge"], j[r["trace"]]) for r in rows if r["trace"] in j]
     if not pairs:
         raise SystemExit(f"в части {split} нет размеченных трейсов с ответом судьи")
@@ -123,10 +135,10 @@ def calibrate(split: str) -> dict:
     return m
 
 
-def estimate(run_dir: str, split: str) -> None:
-    m = calibrate(split)
+def estimate(run_dir: str, split: str, out: Path | None = None) -> None:
+    m = calibrate(split, out)
     recs = records_of(run_dir)
-    j = judged()
+    j = judged(out)
     answers = [j[t] for t in recs if t in j and j[t] in ("yes", "no")]
     if not answers:
         raise SystemExit("по этому прогону ответов судьи нет: python -m evals.judge run " + run_dir)
@@ -139,18 +151,22 @@ def main(argv: list[str] | None = None) -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("run")
     p.add_argument("run")
+    p.add_argument("--prompt", type=Path, help="другой промпт судьи")
+    p.add_argument("--out", type=Path, help="куда писать ответы, по умолчанию analysis/judge.csv")
     p = sub.add_parser("calibrate")
     p.add_argument("--split", default="dev", choices=["train", "dev", "test"])
+    p.add_argument("--out", type=Path)
     p = sub.add_parser("estimate")
     p.add_argument("run")
     p.add_argument("--split", default="test", choices=["dev", "test"])
+    p.add_argument("--out", type=Path)
     a = ap.parse_args(argv)
     if a.cmd == "run":
-        run(a.run)
+        run(a.run, prompt=a.prompt, out=a.out)
     elif a.cmd == "calibrate":
-        calibrate(a.split)
+        calibrate(a.split, a.out)
     else:
-        estimate(a.run, a.split)
+        estimate(a.run, a.split, a.out)
 
 
 if __name__ == "__main__":

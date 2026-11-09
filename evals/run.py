@@ -5,6 +5,8 @@
 
 --oracle вместо агента выполняет эталон задачи: так проверяется, что
 задача решаема и проверка её засчитывает (как oracle в Harbor).
+--stub ставит агента-заглушку: он ничего не делает и отвечает «Готово».
+Задача, где нужно действие, а заглушка её проходит, ничего не меряет.
 """
 
 from __future__ import annotations
@@ -50,6 +52,11 @@ def oracle_trial(task: dict) -> dict:
     return {"messages": messages, "usage": {}, "end": "oracle", "seconds": 0, "_store": store}
 
 
+def stub_trial(task: dict) -> dict:
+    messages = [{"role": "assistant", "content": "Готово."}]
+    return {"messages": messages, "usage": {}, "end": "stub", "seconds": 0, "_store": Store()}
+
+
 def agent_trial(task: dict) -> dict:
     from agent import loop
     from kladovka import llm
@@ -62,9 +69,9 @@ def agent_trial(task: dict) -> dict:
     return out
 
 
-def one(task: dict, trial: int, oracle: bool) -> dict:
+def one(task: dict, trial: int, mode: str) -> dict:
     try:
-        out = oracle_trial(task) if oracle else agent_trial(task)
+        out = {"oracle": oracle_trial, "stub": stub_trial}.get(mode, agent_trial)(task)
         store = out.pop("_store")
         out["grade"] = G.grade(task, store, out["messages"])
         out["calls"] = store.calls
@@ -84,6 +91,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--only", help="id задач через запятую")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--oracle", action="store_true", help="выполнить эталон вместо агента")
+    ap.add_argument("--stub", action="store_true", help="агент-заглушка: ничего не делает")
     ap.add_argument("--note", default="", help="пометка: что поменяли")
     a = ap.parse_args(argv)
 
@@ -104,15 +112,17 @@ def main(argv: list[str] | None = None) -> None:
         "tasks": a.tasks,
         "k": a.k,
         "oracle": a.oracle,
-        "agent_model": None if a.oracle else os.environ.get("AGENT_MODEL"),
-        "user_model": None if a.oracle else (os.environ.get("USER_MODEL") or os.environ.get("AGENT_MODEL")),
+        "stub": a.stub,
+        "agent_model": None if (a.oracle or a.stub) else os.environ.get("AGENT_MODEL"),
+        "user_model": None if (a.oracle or a.stub) else (os.environ.get("USER_MODEL") or os.environ.get("AGENT_MODEL")),
         "agent_version": agent_version(),
         "git": git_sha(),
         "note": a.note,
     }
     jobs = [(t, i) for t in tasks for i in range(a.k)]
     with ThreadPoolExecutor(max_workers=max(1, a.workers)) as ex:
-        results = list(ex.map(lambda j: one(j[0], j[1], a.oracle), jobs))
+        mode = "oracle" if a.oracle else "stub" if a.stub else "agent"
+        results = list(ex.map(lambda j: one(j[0], j[1], mode), jobs))
     with (out / "traces.jsonl").open("w", encoding="utf-8") as f:
         for r in results:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")

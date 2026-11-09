@@ -31,7 +31,7 @@ def print_report(results: list[dict], meta: dict, *, k: int | None = None) -> No
     k = k or _k_of(results)
     per = stats.by_task(results)
     fam = {r["task_id"]: r.get("family") or "—" for r in results}
-    print(f"агент {meta.get('agent_version')}  модель {meta.get('agent_model') or 'эталон'}  задач {len(per)}  попыток на задачу {k}")
+    print(f"агент {meta.get('agent_version')}  модель {meta.get('agent_model') or ('заглушка' if meta.get('stub') else 'эталон')}  задач {len(per)}  попыток на задачу {k}")
     print(f"{'задача':<12} {'семья':<18} {'успехов':>8}  {'pass^1':>6}  {'pass^' + str(k):>6}")
     for t in sorted(per):
         n, c = per[t]

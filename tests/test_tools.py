@@ -85,3 +85,23 @@ def test_rates_and_correction():
     assert judge.corrected(0.25, 0.5, 1.0) == pytest.approx(0.5)
     with pytest.raises(ValueError):
         judge.corrected(0.5, 0.5, 0.5)
+
+
+def test_stub_passes_only_tasks_without_actions_and_outputs():
+    from evals import run as R
+
+    for t in load("tasks/dev.jsonl"):
+        out = R.one(t, 0, "stub")
+        expected = int(not t["actions"] and not t["outputs"])
+        assert out["grade"]["reward"] == expected, t["id"]
+
+
+def test_second_judge_writes_its_own_file(run_dir, tmp_path, monkeypatch):
+    monkeypatch.setattr(analysis, "LABELS", tmp_path / "labels.csv")
+    monkeypatch.setattr(judge, "OUT", tmp_path / "judge.csv")
+    bad = tmp_path / "bad_prompt.md"
+    bad.write_text("Хорош ли ответ?\n{conversation}\n", encoding="utf-8")
+    llm = ScriptedLLM([{"content": '{"answer": "no"}'}, {"content": '{"answer": "no"}'}])
+    judge.run(str(run_dir), llm=llm, prompt=bad, out=tmp_path / "judge-bad.csv")
+    assert (tmp_path / "judge-bad.csv").exists() and not (tmp_path / "judge.csv").exists()
+    assert set(judge.judged(tmp_path / "judge-bad.csv").values()) == {"no"}
