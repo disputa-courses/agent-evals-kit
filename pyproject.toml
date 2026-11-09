@@ -1,0 +1,13 @@
+[project]
+name = "kladovka-evals"
+version = "0.1.0"
+description = "Агент поддержки «Кладовки» и обвязка его оценки"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
