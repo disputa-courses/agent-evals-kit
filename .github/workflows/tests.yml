@@ -1,0 +1,18 @@
+# Тесты обвязки и эталон каждой задачи: без модели и ключей.
+name: Набор
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run pytest -q
+      - run: |
+          python3 -m evals.run --tasks tasks/dev.jsonl --oracle --out runs/oracle
+          python3 -m evals.run --tasks tasks/train.jsonl --oracle --out runs/oracle-train
